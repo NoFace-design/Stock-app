@@ -39,6 +39,16 @@ body{background:radial-gradient(circle at 20% 10%,#1e1b4b,#0b1020 50%,#020617);m
       <div class="glass p-3 border-l-4 border-red-500"><div class="text-xs text-slate-400">Downward Risk / Stop Level</div><div id="stop" class="text-xl font-bold text-red-400">–</div></div>
     </div>
   </div>
+  <div data-tab="signal" class="grid gap-3">
+    <div class="glass p-4 border-2 border-purple-500/70 bg-purple-600/10">
+      <div class="text-xs text-purple-300 uppercase tracking-wide">Advice (my calculation)</div>
+      <div id="adv-h" class="text-xl font-bold text-purple-200 mt-1">Calculating…</div>
+      <div id="adv-d" class="text-sm text-slate-200 mt-1"></div>
+      <div id="adv-w" class="text-xs text-slate-400 mt-2"></div>
+      <div class="text-xs text-purple-300/80 mt-2">This is only my calculation and I cannot guarantee anything. Not financial advice.</div>
+    </div>
+    <div id="key" class="glass p-3 flex flex-wrap items-center gap-2 text-sm"></div>
+  </div>
   <div class="grid lg:grid-cols-3 gap-4">
     <div data-tab="chart" class="glass p-2 lg:col-span-2 h-[65vh] lg:h-[480px]" id="chart"></div>
     <div data-tab="news" class="glass p-3 h-[70vh] lg:h-[480px] flex flex-col">
@@ -69,21 +79,39 @@ function chart(){const c=$("chart");c.innerHTML='<div class="tradingview-widget-
   const s=document.createElement("script");s.src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";s.async=true;
   s.textContent=JSON.stringify({autosize:true,symbol:sym(cur),interval:TVI[tf],theme:"dark",style:"1",locale:"en",backgroundColor:"rgba(0,0,0,0)",allow_symbol_change:false,hide_side_toolbar:false});
   c.firstChild.appendChild(s)}
-async function loadAnalysis(){const id=++reqId;$("err").classList.add("hidden");
-  try{const r=await fetch(`/api/analysis/${cur}?tf=${tf}`);if(!r.ok)throw new Error((await r.json()).detail||r.status);
-    const d=await r.json();if(id!==reqId)return;
-    const [bg,bd]=COL[d.color];$("verdict").className=`glass p-5 text-center flex flex-col justify-center lg:col-span-1 border-2 ${bg} ${bd}`;
-    $("vtxt").textContent=d.verdict;$("vsub").textContent=`${cur} @ ${f(d.price)} · ${tf} · ATR ${f(d.atr)}`;
-    $("arc").setAttribute("stroke-dasharray",`${d.prob_up/100*283} 283`);$("pct").textContent=d.prob_up.toFixed(0)+"%";
-    $("up").textContent=`${d.prob_up}% Upward`;$("dn").textContent=`${d.prob_down}% Downside risk`;
-    $("parts").textContent=`Technical ${d.tech_score}% · News ${d.news_score>=0?"+":""}${d.news_score} (${d.news_count} headlines) · History ${d.hist_prob==null?"n/a":d.hist_prob+"%"}`;
-    $("buy").textContent=`${f(d.targets.buy[0])} – ${f(d.targets.buy[1])}`;
-    $("tp").textContent=`${f(d.targets.take_profit[0])} – ${f(d.targets.take_profit[1])}`;
-    $("stop").textContent=f(d.targets.stop);
-    $("meta").textContent=`Support ${f(d.targets.support)} · Resistance ${f(d.targets.resistance)} · bar ${d.asof.slice(0,16)}`;
-    const c=d.counts;$("cnt").textContent=`— ${c.scanned} scanned: ${c.bullish} bull / ${c.bearish} bear / ${c.neutral} neutral`;
-    renderHist(d.history);$("fired").innerHTML="";d.fired.forEach(x=>{const li=document.createElement("li");li.textContent=x;$("fired").appendChild(li)});
+const CACHE={};let pf=0;
+const KEY=[["TSI","TSI"],["OBV vs EMA20","OBV"],["Stoch RSI","Stoch RSI"],["MACD","MACD"]];
+function clearView(){$("verdict").className="glass p-5 text-center flex flex-col justify-center lg:col-span-1";
+  $("vtxt").textContent=`Analyzing ${cur}…`;$("vsub").textContent="Fetching news, charts and history";
+  $("arc").setAttribute("stroke-dasharray","0 283");["pct","up","dn","parts","meta","adv-d","adv-w","cnt"].forEach(i=>$(i).textContent=i==="pct"?"–":"");
+  ["buy","tp","stop"].forEach(i=>$(i).textContent="–");$("adv-h").textContent="Calculating…";$("key").innerHTML="";
+  $("hist").textContent="Loading history…";$("hsub").textContent="";$("fired").innerHTML=""}
+function show(d,age){$("err").classList.add("hidden");
+  const [bg,bd]=COL[d.color];$("verdict").className=`glass p-5 text-center flex flex-col justify-center lg:col-span-1 border-2 ${bg} ${bd}`;
+  $("vtxt").textContent=d.verdict;$("vsub").textContent=`${d.ticker} @ ${f(d.price)} · ${d.tf} · ATR ${f(d.atr)}`+(age>5?` · from ${age}s ago, refreshing…`:"");
+  $("arc").setAttribute("stroke-dasharray",`${d.prob_up/100*283} 283`);$("pct").textContent=d.prob_up.toFixed(0)+"%";
+  $("up").textContent=`${d.prob_up}% Upward`;$("dn").textContent=`${d.prob_down}% Downside risk`;
+  $("parts").textContent=`Technical ${d.tech_score}% · News ${d.news_score>=0?"+":""}${d.news_score} (${d.news_count} headlines) · History ${d.hist_prob==null?"n/a":d.hist_prob+"%"}`;
+  $("buy").textContent=`${f(d.targets.buy[0])} – ${f(d.targets.buy[1])}`;
+  $("tp").textContent=`${f(d.targets.take_profit[0])} – ${f(d.targets.take_profit[1])}`;$("stop").textContent=f(d.targets.stop);
+  $("meta").textContent=`Support ${f(d.targets.support)} · Resistance ${f(d.targets.resistance)} · bar ${d.asof.slice(0,16)}`;
+  $("adv-h").textContent=d.advice.headline;$("adv-d").textContent=d.advice.detail;$("adv-w").textContent="Why: "+d.advice.why;
+  const kb=$("key");kb.innerHTML="";kb.appendChild(el("span","text-slate-400","Your key indicators:"));
+  KEY.forEach(([n,l])=>{const s=d.signals.find(x=>x.n===n),v=s?s.s:null;
+    kb.appendChild(el("span","px-3 py-1 rounded-full "+(v>0?"bg-green-700/60":v<0?"bg-red-700/60":"bg-slate-600/60"),`${l}: ${s?(v>0?"Bullish":v<0?"Bearish":"Neutral"):"n/a"}`))});
+  const c=d.counts;$("cnt").textContent=`— ${c.scanned} scanned: ${c.bullish} bull / ${c.bearish} bear / ${c.neutral} neutral`;
+  renderHist(d.history);$("fired").innerHTML="";
+  d.signals.forEach(x=>{const li=el("li",x.s>0?"text-green-300":x.s<0?"text-red-300":"text-slate-400",`${x.n} (${x.g}): ${x.s>0?"Bullish":x.s<0?"Bearish":"Neutral"}`);$("fired").appendChild(li)})}
+async function loadAnalysis(quiet){const id=++reqId,t0=cur,f0=tf;
+  if(!quiet){const c=CACHE[t0+"|"+f0];if(c)show(c.d,Math.round((Date.now()-c.t)/1000));else clearView()}
+  try{const r=await fetch(`/api/analysis/${t0}?tf=${f0}`);
+    if(!r.ok){let m=r.status;try{m=(await r.json()).detail}catch(e){}throw new Error(m)}
+    const d=await r.json();CACHE[d.ticker+"|"+d.tf]={d,t:Date.now()};
+    if(id!==reqId)return;show(d,0);prefetch()
   }catch(e){if(id!==reqId)return;$("err").textContent="Analysis failed: "+e.message;$("err").classList.remove("hidden")}}
+function prefetch(){const tok=++pf,f0=tf;(async()=>{for(const t of TK){if(tok!==pf||document.hidden)return;
+  const k=t+"|"+f0,c=CACHE[k];if(c&&Date.now()-c.t<120000)continue;
+  try{const r=await fetch(`/api/analysis/${t}?tf=${f0}`);if(r.ok){const d=await r.json();CACHE[d.ticker+"|"+d.tf]={d,t:Date.now()}}}catch(e){}}})()}
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e},N=x=>x==null?"–":x,sg=x=>x>=0?"+"+x:""+x;
 function renderHist(h){const box=$("hist");box.innerHTML="";
   if(!h||h.error){$("hsub").textContent="";box.textContent="History unavailable: "+((h&&h.error)||"no data");return}
@@ -110,7 +138,7 @@ async function loadNews(){try{const r=await fetch("/api/news"+(all?"":"?ticker="
     top.append(src,bd,tm);const a=document.createElement(/^https?:/.test(i.link)?"a":"span");
     if(a.tagName==="A"){a.href=i.link;a.target="_blank";a.rel="noopener"}a.className="hover:underline";a.textContent=i.title;d.append(top,a);box.appendChild(d)})}catch(e){}}
 $("scope").onclick=()=>{all=!all;menus();loadNews()};
-function refresh(){menus();chart();$("news").textContent="Fetching the latest headlines…";nextAt=Date.now()+30000;loadAnalysis();loadNews()}
+function refresh(){menus();chart();$("news").textContent="Fetching the latest headlines…";pf++;nextAt=Date.now()+30000;loadAnalysis();loadNews()}
 const TABS={signal:["signal","signalb"],chart:["chart"],news:["news"]},TL={signal:"Signal",chart:"Chart",news:"News"};
 function setTab(n){document.querySelectorAll("[data-tab]").forEach(e=>e.classList.toggle("on",TABS[n].includes(e.dataset.tab)));
   const nv=$("tabs");nv.innerHTML="";Object.keys(TL).forEach(k=>{const b=document.createElement("button");b.textContent=TL[k];
@@ -121,7 +149,7 @@ async function loadSources(){try{const s=await(await fetch("/api/sources")).json
     by[rg].forEach(x=>{const sp=document.createElement("span");sp.className="inline-block mr-3";sp.textContent=(x.ok?"🟢 ":"🔴 ")+x.name;d.appendChild(sp)});box.appendChild(d)})}catch(e){}}
 setTab("signal");setTimeout(loadSources,15000);setInterval(loadSources,60000);
 let nextAt=0;
-function cycle(){nextAt=Date.now()+30000;loadNews();loadAnalysis()}
+function cycle(){nextAt=Date.now()+30000;loadNews();loadAnalysis(true)}
 setInterval(()=>{if(document.hidden)return;const s=Math.max(0,Math.round((nextAt-Date.now())/1000));$("tick").textContent=`● Live · next refresh in ${s}s`;if(s<=0)cycle()},1000);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)cycle()});
 refresh();

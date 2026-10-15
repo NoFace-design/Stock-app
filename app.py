@@ -1,4 +1,4 @@
-import asyncio, re, time, os, math, calendar, hashlib
+import asyncio, re, time, os, math, calendar, hashlib, threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -105,13 +105,19 @@ async def refresh_news():
 
 app = FastAPI()
 
+async def capped_refresh():
+    # wait at most 4s for fresh news so switching stocks stays fast; the fetch keeps running
+    try: await asyncio.wait_for(asyncio.shield(asyncio.ensure_future(refresh_news())), 4)
+    except asyncio.TimeoutError: pass
+
 CACHE = {}
+YF_LOCK = threading.Lock()  # yfinance mixes data when two downloads for one ticker overlap
 TF = {"15M": ("15m", "30d", None), "1H": ("60m", "180d", None), "4H": ("60m", "360d", "4h"), "1D": ("1d", "2y", None)}
 def load(t, tf):
     k = (t, tf)
     if k in CACHE and time.time() - CACHE[k][0] < 10: return CACHE[k][1]
     iv, per, rs = TF[tf]
-    df = yf.download(t, period=per, interval=iv, progress=False, auto_adjust=False, threads=False)
+    with YF_LOCK: df = yf.Ticker(t).history(period=per, interval=iv, auto_adjust=False)
     if df is None or df.empty: raise ValueError("no market data returned")
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     df.columns = [str(c).lower() for c in df.columns]
@@ -191,6 +197,8 @@ def signals(df):
     add("RSI(7)", "Momentum", band(sv(T(ta.rsi, c, length=7)), 30, 70))
     m = T(ta.macd, c); add("MACD", "Momentum", cmp(sv(m, 0), sv(m, 2)))
     st = T(ta.stoch, h, l, c); add("Stoch %K zone", "Momentum", band(sv(st, 0), 20, 80)); add("Stoch K/D", "Momentum", cmp(sv(st, 0), sv(st, 1)))
+    sr = T(ta.stochrsi, c); k_, d_ = sv(sr, 0), sv(sr, 1)
+    add("Stoch RSI", "Momentum", None if k_ is None else (1 if k_ < 20 else -1 if k_ > 80 else cmp(k_, d_)))
     add("CCI(20)", "Momentum", band(sv(T(ta.cci, h, l, c)), -100, 100))
     add("Williams %R", "Momentum", band(sv(T(ta.willr, h, l, c)), -80, -20))
     add("ROC(10)", "Momentum", cmp(sv(T(ta.roc, c, length=10)), 0))
@@ -247,6 +255,8 @@ def hist_signals(df):
     put("OBV", lambda: np.sign(ta.obv(c, v) - ta.ema(ta.obv(c, v), length=20)))
     put("CMF", lambda: sg(ta.cmf(h, l, c, v) > .05, ta.cmf(h, l, c, v) < -.05))
     put("MFI", lambda: sg(ta.mfi(h, l, c, v, length=14) < 20, ta.mfi(h, l, c, v, length=14) > 80))
+    put("TSI", lambda: np.sign(ta.tsi(c).iloc[:, 0] - ta.tsi(c).iloc[:, 1]))
+    put("Stoch RSI", lambda: pd.Series(np.where(ta.stochrsi(c).iloc[:, 0] < 20, 1, np.where(ta.stochrsi(c).iloc[:, 0] > 80, -1, np.sign(ta.stochrsi(c).iloc[:, 0] - ta.stochrsi(c).iloc[:, 1]))), index=df.index))
     put("Supertrend", lambda: ta.supertrend(h, l, c).iloc[:, 1])
     return pd.DataFrame(S).fillna(0)
 
@@ -264,7 +274,7 @@ def tone_study(t, c):
     return {"days": int(len(x)), "corr": f2(x.dev.corr(x.f5)), "up_pos": f2((pos.f5 > 0).mean() * 100), "up_neg": f2((neg.f5 > 0).mean() * 100), "tone_now": f2(dev.dropna().iloc[-1])}
 
 def _history(t):
-    df = yf.download(t, period="max", interval="1d", progress=False, auto_adjust=True, threads=False)
+    with YF_LOCK: df = yf.Ticker(t).history(period="max", interval="1d", auto_adjust=True)
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     df.columns = [str(x).lower() for x in df.columns]
     df = df[["open", "high", "low", "close", "volume"]].astype(float).dropna().tail(3800)
@@ -299,7 +309,7 @@ def _history(t):
 
 HC = {}
 def history(t):
-    if t in HC and time.time() - HC[t][0] < 3600: return HC[t][1]
+    if t in HC and time.time() - HC[t][0] < 21600: return HC[t][1]
     try: out = _history(t)
     except Exception as e: out = {"error": str(e)}
     HC[t] = (time.time(), out); return out
@@ -307,7 +317,7 @@ def history(t):
 async def _analysis(ticker: str, tf: str = "1D"):
     ticker = ticker.upper()
     if ticker not in TICKERS or tf not in TF: raise HTTPException(404, "unknown ticker/timeframe")
-    try: _, df, hist = await asyncio.gather(refresh_news(), asyncio.to_thread(load, ticker, tf), asyncio.to_thread(history, ticker))
+    try: _, df, hist = await asyncio.gather(capped_refresh(), asyncio.to_thread(load, ticker, tf), asyncio.to_thread(history, ticker))
     except Exception as e: raise HTTPException(502, f"data error: {e}")
     if len(df) < 60: raise HTTPException(502, "not enough bars")
     sigs, atr, scanned = await asyncio.to_thread(signals, df)
@@ -325,6 +335,15 @@ async def _analysis(ticker: str, tf: str = "1D"):
     tp_hi = max(p + 2.5 * atr, tp_lo + 0.5 * atr)
     stop = min(sup - 0.25 * atr, p - 1.5 * atr)
     verdict = ("STRONG BUY / BULLISH BREAKOUT", "green") if up >= 65 else ("HIGH RISK / BEARISH DOWN TREND", "red") if up <= 35 else ("NEUTRAL RANGE", "yellow")
+    usd = lambda x: f"${x:,.2f}"
+    nbull = sum(x["signal"] > 0 for x in sigs); nbear = sum(x["signal"] < 0 for x in sigs)
+    nl = "positive" if ns > 0.15 else "negative" if ns < -0.15 else "neutral"
+    if up >= 65: ah, ad = "BUY NOW and hold", f"Buy around {usd(lo)} to {usd(hi)} (or at the current {usd(p)}), hold until it reaches {usd(tp_lo)} to {usd(tp_hi)}, then sell. If it falls to {usd(stop)}, exit to limit the loss."
+    elif up >= 55: ah, ad = "Lean BUY - start small", f"Conditions lean positive but not strongly. Consider a small buy near {usd(lo)} to {usd(hi)}, aim to sell at {usd(tp_lo)} to {usd(tp_hi)}, and exit if it drops to {usd(stop)}."
+    elif up > 45: ah, ad = "WAIT - no clear edge", f"Signals are mixed. Better to wait for a dip into {usd(lo)} to {usd(hi)} or a clear break above {usd(res)} before buying."
+    elif up > 35: ah, ad = "Not a good time to buy", f"Conditions lean negative. Wait for a pullback toward {usd(sup)}. If you hold it, consider selling into a bounce near {usd(tp_lo)}, and exit below {usd(stop)}."
+    else: ah, ad = "AVOID - high risk, wait", f"Conditions are negative. Don't buy now. If you hold it, consider selling on a bounce near {usd(tp_lo)} or if it breaks {usd(stop)}. Wait for it to reach {usd(sup)} and stabilize before reconsidering."
+    advice = {"headline": ah, "detail": ad, "why": f"{nbull} bullish vs {nbear} bearish indicators, news {nl}, history {'n/a' if hp is None else str(round(hp)) + '% up over 10 days'}."}
     r = lambda x: round(float(x), 2)
     return {"ticker": ticker, "tf": tf, "price": r(p), "atr": r(atr), "asof": str(df.index[-1]),
             "tech_score": r(tech), "news_score": r(ns), "news_count": nn,
@@ -332,7 +351,7 @@ async def _analysis(ticker: str, tf: str = "1D"):
             "targets": {"buy": [r(lo), r(hi)], "take_profit": [r(tp_lo), r(tp_hi)], "stop": r(stop), "support": r(sup), "resistance": r(res)},
             "counts": {"bullish": sum(s["signal"] > 0 for s in sigs), "bearish": sum(s["signal"] < 0 for s in sigs),
                        "neutral": sum(s["signal"] == 0 for s in sigs), "scanned": scanned},
-            "history": hist, "hist_prob": hp, "fired": [f'{s["name"]} ({s["group"]}): {"Bull" if s["signal"] > 0 else "Bear" if s["signal"] < 0 else "Neutral"}' for s in sigs if s["signal"] != 0][:40]}
+            "history": hist, "hist_prob": hp, "advice": advice, "signals": [{"n": x["name"], "g": x["group"], "s": x["signal"]} for x in sigs]}
 
 @app.get("/api/analysis/{ticker}")
 async def analysis(ticker: str, tf: str = "1D"):
