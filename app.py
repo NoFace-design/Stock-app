@@ -304,14 +304,14 @@ def history(t):
     except Exception as e: out = {"error": str(e)}
     HC[t] = (time.time(), out); return out
 
-@app.get("/api/analysis/{ticker}")
-async def analysis(ticker: str, tf: str = "1D"):
+async def _analysis(ticker: str, tf: str = "1D"):
     ticker = ticker.upper()
     if ticker not in TICKERS or tf not in TF: raise HTTPException(404, "unknown ticker/timeframe")
     try: _, df, hist = await asyncio.gather(refresh_news(), asyncio.to_thread(load, ticker, tf), asyncio.to_thread(history, ticker))
     except Exception as e: raise HTTPException(502, f"data error: {e}")
     if len(df) < 60: raise HTTPException(502, "not enough bars")
     sigs, atr, scanned = await asyncio.to_thread(signals, df)
+    if not sigs: raise HTTPException(502, "no indicators could be computed (indicator library problem)")
     tw = sum(s["weight"] for s in sigs)
     tech = 50 + 50 * sum(s["weight"] * s["signal"] for s in sigs) / tw
     ns, nn = news_score(ticker)
@@ -333,6 +333,14 @@ async def analysis(ticker: str, tf: str = "1D"):
             "counts": {"bullish": sum(s["signal"] > 0 for s in sigs), "bearish": sum(s["signal"] < 0 for s in sigs),
                        "neutral": sum(s["signal"] == 0 for s in sigs), "scanned": scanned},
             "history": hist, "hist_prob": hp, "fired": [f'{s["name"]} ({s["group"]}): {"Bull" if s["signal"] > 0 else "Bear" if s["signal"] < 0 else "Neutral"}' for s in sigs if s["signal"] != 0][:40]}
+
+@app.get("/api/analysis/{ticker}")
+async def analysis(ticker: str, tf: str = "1D"):
+    try: return await _analysis(ticker, tf)
+    except HTTPException: raise
+    except Exception as e:
+        import traceback
+        raise HTTPException(500, f"{type(e).__name__}: {e} | " + " / ".join(traceback.format_exc().strip().splitlines()[-4:]))
 
 @app.get("/api/news")
 async def news(ticker: str = "", limit: int = 60):
