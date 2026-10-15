@@ -17,7 +17,7 @@ ALIASES = {"NVDA": ["nvidia"], "AAPL": ["apple", "iphone"], "AMZN": ["amazon", "
            "AMD": ["advanced micro devices"], "TSLA": ["tesla"]}
 RX = {t: re.compile(r"\b(" + "|".join(map(re.escape, [t.lower()] + a)) + r")\b", re.I) for t, a in ALIASES.items()}
 
-W_TECH, W_NEWS, W_HIST = 0.40, 0.40, 0.20  # weights of chart / news / history in the final probability
+W_TECH, W_NEWS, W_HIST = 0.55, 0.25, 0.20  # weights of chart / news / history in the final probability
 NIT = os.getenv("NITTER_HOST", "https://nitter.net")
 def gn(site):  # Google News RSS scoped to one outlet (those outlets have no open RSS)
     return f"https://news.google.com/rss/search?q=site:{site}+(stocks+OR+earnings+OR+markets)+when:1d&hl=en-US&gl=US&ceid=US:en"
@@ -231,6 +231,16 @@ def news_shock(t):
     L = sorted(L, key=lambda i: -i["ts"])
     return {"dir": d, "count": len(L), "sources": len({i["source"] for i in L}), "titles": [i["title"][:110] for i in L[:3]]}
 
+def news_view(t, ns):
+    now = time.time()
+    own = [i for i in NEWS.values() if t in i["tickers"] and now - i["ts"] < 86400]; scope = "last 24h"
+    if not own:
+        own = [i for i in NEWS.values() if not i["tickers"] and now - i["ts"] < 43200]; scope = "market-wide, last 12h"
+    lv = "Very good" if ns >= 0.6 else "Good" if ns >= 0.2 else "Neutral" if ns > -0.2 else "Bad" if ns > -0.6 else "Very bad"
+    pos = sum(i["score"] > 0 for i in own); neg = sum(i["score"] < 0 for i in own)
+    top = sorted(own, key=lambda i: (-abs(i["score"]), -i["ts"]))[:2]
+    return {"level": lv, "scope": scope, "n": len(own), "pos": int(pos), "neg": int(neg), "neu": int(len(own) - pos - neg), "top": [{"t": i["title"][:100], "s": i["source"]} for i in top]}
+
 def news_score(t):
     now = time.time()
     own = [i for i in NEWS.values() if t in i["tickers"] and now - i["ts"] < 86400]
@@ -340,7 +350,7 @@ async def _analysis(ticker: str, tf: str = "1D"):
     ns, nn = news_score(ticker)
     hp = hist.get("p_up")
     nb = 50 + 50 * ns
-    up = max(3.0, min(97.0, (W_TECH * tech + W_NEWS * nb + W_HIST * hp) if hp is not None else (0.55 * tech + 0.45 * nb)))
+    up = max(3.0, min(97.0, (W_TECH * tech + W_NEWS * nb + W_HIST * hp) if hp is not None else (0.7 * tech + 0.3 * nb)))
     shock = news_shock(ticker)
     if shock["dir"] < 0: up = min(up, 40.0)
     elif shock["dir"] > 0: up = max(up, 60.0)
@@ -366,6 +376,9 @@ async def _analysis(ticker: str, tf: str = "1D"):
             advice = {"headline": "BAD NEWS ALERT - don't buy yet", "detail": f"{how} Even if the chart looks fine, wait for the news to settle before buying. If you hold it, reconsider your plan; the price could drift toward {usd(sup)} or lower. Headlines: {ex}", "why": advice["why"], "alert": "bearish"}
         else:
             advice = {"headline": "GOOD NEWS SURGE - watch for a buy", "detail": f"{how} Prices often jump before you can react, so avoid chasing a sudden spike. Consider a small buy on a dip near {usd(lo)} to {usd(hi)}, aiming for {usd(tp_lo)} to {usd(tp_hi)}. Headlines: {ex}", "why": advice["why"], "alert": "bullish"}
+    nv = news_view(ticker, ns)
+    if shock["dir"] < 0: nv["level"] = "Very bad"
+    elif shock["dir"] > 0: nv["level"] = "Very good"
     r = lambda x: round(float(x), 2)
     return {"ticker": ticker, "tf": tf, "price": r(p), "atr": r(atr), "asof": str(df.index[-1]),
             "tech_score": r(tech), "news_score": r(ns), "news_count": nn,
@@ -373,7 +386,7 @@ async def _analysis(ticker: str, tf: str = "1D"):
             "targets": {"buy": [r(lo), r(hi)], "take_profit": [r(tp_lo), r(tp_hi)], "stop": r(stop), "support": r(sup), "resistance": r(res)},
             "counts": {"bullish": sum(s["signal"] > 0 for s in sigs), "bearish": sum(s["signal"] < 0 for s in sigs),
                        "neutral": sum(s["signal"] == 0 for s in sigs), "scanned": scanned},
-            "history": hist, "hist_prob": hp, "advice": advice, "shock": shock, "signals": [{"n": x["name"], "g": x["group"], "s": x["signal"]} for x in sigs]}
+            "history": hist, "hist_prob": hp, "advice": advice, "shock": shock, "news_view": nv, "signals": [{"n": x["name"], "g": x["group"], "s": x["signal"]} for x in sigs]}
 
 @app.get("/api/analysis/{ticker}")
 async def analysis(ticker: str, tf: str = "1D"):

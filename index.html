@@ -42,6 +42,7 @@ body{background:radial-gradient(circle at 20% 10%,#1e1b4b,#0b1020 50%,#020617);m
   <div data-tab="signal" class="grid gap-3">
     <div class="glass p-4 border-2 border-purple-500/70 bg-purple-600/10">
       <div class="text-xs text-purple-300 uppercase tracking-wide">Advice (my calculation)</div>
+      <div class="flex flex-wrap items-center gap-2 mt-1"><span id="nv-badge" class="px-3 py-1 rounded-full text-sm font-semibold bg-slate-600">News: …</span><span id="nv-sum" class="text-sm text-slate-200"></span></div>
       <div id="adv-h" class="text-xl font-bold text-purple-200 mt-1">Calculating…</div>
       <div id="adv-d" class="text-sm text-slate-200 mt-1"></div>
       <div id="adv-w" class="text-xs text-slate-400 mt-2"></div>
@@ -84,7 +85,7 @@ const KEY=[["TSI","TSI"],["OBV vs EMA20","OBV"],["Stoch RSI","Stoch RSI"],["MACD
 function clearView(){$("verdict").className="glass p-5 text-center flex flex-col justify-center lg:col-span-1";
   $("vtxt").textContent=`Analyzing ${cur}…`;$("vsub").textContent="Fetching news, charts and history";
   $("arc").setAttribute("stroke-dasharray","0 283");["pct","up","dn","parts","meta","adv-d","adv-w","cnt"].forEach(i=>$(i).textContent=i==="pct"?"–":"");
-  ["buy","tp","stop"].forEach(i=>$(i).textContent="–");$("adv-h").textContent="Calculating…";$("key").innerHTML="";
+  ["buy","tp","stop"].forEach(i=>$(i).textContent="–");$("adv-h").textContent="Calculating…";$("nv-badge").textContent="News: …";$("nv-badge").className="px-3 py-1 rounded-full text-sm font-semibold bg-slate-600";$("nv-sum").textContent="";$("key").innerHTML="";
   $("hist").textContent="Loading history…";$("hsub").textContent="";$("fired").innerHTML=""}
 function show(d,age){$("err").classList.add("hidden");
   const [bg,bd]=COL[d.color];$("verdict").className=`glass p-5 text-center flex flex-col justify-center lg:col-span-1 border-2 ${bg} ${bd}`;
@@ -95,6 +96,9 @@ function show(d,age){$("err").classList.add("hidden");
   $("buy").textContent=`${f(d.targets.buy[0])} – ${f(d.targets.buy[1])}`;
   $("tp").textContent=`${f(d.targets.take_profit[0])} – ${f(d.targets.take_profit[1])}`;$("stop").textContent=f(d.targets.stop);
   $("meta").textContent=`Support ${f(d.targets.support)} · Resistance ${f(d.targets.resistance)} · bar ${d.asof.slice(0,16)}`;
+  const nv=d.news_view,NC={"Very good":"bg-green-600","Good":"bg-green-700/70","Neutral":"bg-slate-600","Bad":"bg-red-700/70","Very bad":"bg-red-600"};
+  $("nv-badge").className="px-3 py-1 rounded-full text-sm font-semibold "+NC[nv.level];$("nv-badge").textContent="News: "+nv.level;
+  $("nv-sum").textContent=nv.n?`${nv.pos} positive, ${nv.neg} negative, ${nv.neu} neutral headlines (${nv.scope}). Main story: ${nv.top[0].t}`:"No recent headlines found.";
   $("adv-h").textContent=d.advice.headline;$("adv-d").textContent=d.advice.detail;$("adv-w").textContent="Why: "+d.advice.why;
   const kb=$("key");kb.innerHTML="";kb.appendChild(el("span","text-slate-400","Your key indicators:"));
   KEY.forEach(([n,l])=>{const s=d.signals.find(x=>x.n===n),v=s?s.s:null;
