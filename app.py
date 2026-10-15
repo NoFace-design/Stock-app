@@ -2,7 +2,11 @@ import asyncio, re, time, os, math, calendar, hashlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
-import httpx, feedparser, numpy as np, pandas as pd, yfinance as yf, pandas_ta as ta
+import httpx, feedparser, numpy as np, pandas as pd, yfinance as yf
+try:
+    import pandas_ta_classic as ta
+except ImportError:
+    import pandas_ta as ta
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
