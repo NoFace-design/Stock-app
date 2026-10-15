@@ -127,7 +127,7 @@ def sv(x, col=0):
         s = x.iloc[:, col] if isinstance(x, pd.DataFrame) else x
         return float(s.dropna().iloc[-1])
     except Exception: return None
-def cmp(a, b): return None if a is None or b is None else (a > b) - (a < b)
+def cmp(a, b): return None if a is None or b is None else int(float(a) > float(b)) - int(float(a) < float(b))
 def band(x, lo, hi): return None if x is None or lo is None or hi is None else (1 if x < lo else -1 if x > hi else 0)
 
 NPAT = 17
