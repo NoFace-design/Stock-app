@@ -1,4 +1,5 @@
-import asyncio, re, time, os, math, calendar, hashlib, threading, json
+import asyncio, re, time, os, math, calendar, hashlib, threading, types
+import html as _html, json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -28,7 +29,7 @@ FEEDS = {
     "Wall Street Journal": ("Americas", "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"),
     "CNBC": ("Americas", "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
     "MarketWatch": ("Americas", "https://feeds.content.dowjones.io/public/rss/mw_topstories"),
-    "Barron's": ("Americas", gn("barrons.com")), "Yahoo Finance": ("Americas", "https://finance.yahoo.com/news/rssindex"),
+    "Barron's": ("Americas", gn("barrons.com")), "Yahoo Finance": ("Americas", gn("finance.yahoo.com")), "Yahoo Finance RSS": ("Americas", "https://finance.yahoo.com/news/rssindex"),
     "Seeking Alpha": ("Americas", "https://seekingalpha.com/market_currents.xml"),
     "Benzinga": ("Americas", "https://www.benzinga.com/feed"), "Investing.com": ("Americas", "https://www.investing.com/rss/news.rss"),
     "Business Wire": ("Americas", gn("businesswire.com")), "PR Newswire": ("Americas", "https://www.prnewswire.com/rss/news-releases-list.rss"),
@@ -42,16 +43,20 @@ FEEDS = {
     "Sky News": ("Europe", "https://feeds.skynews.com/feeds/rss/business.xml"), "DW Business": ("Europe", "https://rss.dw.com/rdf/rss-en-bus"),
     "Euronews": ("Europe", gn("euronews.com")), "S&P Global": ("Global", gn("spglobal.com")),
     # Asia (supply-chain and chip coverage lands here first)
-    "Nikkei Asia": ("Asia", "https://asia.nikkei.com/rss/feed/nar"), "SCMP": ("Asia", "https://www.scmp.com/rss/92/feed"),
-    "Caixin": ("Asia", gn("caixinglobal.com")), "Straits Times": ("Asia", "https://www.straitstimes.com/news/business/rss.xml"),
+    "Nikkei Asia": ("Asia", "https://asia.nikkei.com/rss/feed/nar"), "SCMP": ("China", "https://www.scmp.com/rss/92/feed"),
+    "Caixin": ("China", gn("caixinglobal.com")), "Straits Times": ("Asia", "https://www.straitstimes.com/news/business/rss.xml"),
     "Korea Herald": ("Asia", gn("koreaherald.com")), "Focus Taiwan (CNA)": ("Asia", gn("focustaiwan.tw")),
-    "DigiTimes": ("Asia", gn("digitimes.com")), "Economic Times": ("Asia", "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"),
+    "DigiTimes": ("Asia", gn("digitimes.com")), "Taipei Times": ("Asia", gn("taipeitimes.com")), "TrendForce": ("Asia", gn("trendforce.com")), "Economic Times": ("Asia", "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"),
     "Mint": ("Asia", gn("livemint.com")), "Japan Times": ("Asia", gn("japantimes.co.jp")),
+    # China (English editions; privately run commercial outlets only, state-run media excluded on purpose)
+    "TechNode": ("China", gn("technode.com")),
+    "Pandaily": ("China", gn("pandaily.com")), "36Kr English": ("China", gn("eu.36kr.com")),
+    "CnEVPost": ("China", gn("cnevpost.com")), "EqualOcean": ("China", gn("equalocean.com")),
     # Middle East
     "Arab News": ("Middle East", gn("arabnews.com")), "Gulf News": ("Middle East", gn("gulfnews.com")),
     "The National (UAE)": ("Middle East", gn("thenationalnews.com")), "Al Arabiya": ("Middle East", gn("english.alarabiya.net")),
     # Real-time breaking wires (fast, unverified)
-    "Watcher.Guru": ("Breaking", f"{NIT}/WatchersGuru/rss"), "UnusualWhales": ("Breaking", f"{NIT}/unusual_whales/rss"),
+    "Watcher.Guru": ("Breaking", "https://t.me/s/watcherguru"), "UnusualWhales": ("Breaking", gn("unusualwhales.com")),
     "Deitaone": ("Breaking", f"{NIT}/Deitaone/rss"),
 }
 SEC_UA = {"User-Agent": "TradingDashboard/1.0 (replace-with-your-email@example.com)"}
@@ -71,12 +76,24 @@ def sentiment(text):
     return sc, ("Positive" if sc > 0 else "Negative" if sc < 0 else "Neutral")
 
 NEWS = {}
+def tg_feed(text):
+    # reads a public Telegram channel preview page (t.me/s/<channel>) into feed-like entries
+    ents = []
+    for blk in text.split("tgme_widget_message_wrap")[1:]:
+        m = re.search(r'data-post="([^"]+)"', blk); t = re.search(r'tgme_widget_message_text[^>]*>(.*?)</div>', blk, re.S); d = re.search(r'datetime="([^"]+)"', blk)
+        if not (m and t): continue
+        body = _html.unescape(re.sub(r"<[^>]+>", " ", re.sub(r"<br\s*/?>", " ", t.group(1)))); body = re.sub(r"\s+", " ", body).strip()
+        try: pp = time.strptime(d.group(1)[:19], "%Y-%m-%dT%H:%M:%S") if d else None
+        except Exception: pp = None
+        if body: ents.append({"title": body[:220], "link": "https://t.me/" + m.group(1), "published_parsed": pp})
+    return types.SimpleNamespace(entries=ents[::-1])
+
 STATUS = {}
 async def pull(client, name, meta):
     region, url = meta
     try:
         r = await client.get(url, headers=SEC_UA if "sec.gov" in url else None); r.raise_for_status()
-        feed = feedparser.parse(r.text)
+        feed = tg_feed(r.text) if "t.me/s/" in url else feedparser.parse(r.text)
         STATUS[name] = {"name": name, "region": region, "ok": len(feed.entries) > 0}
     except Exception:
         STATUS[name] = {"name": name, "region": region, "ok": False}; return
