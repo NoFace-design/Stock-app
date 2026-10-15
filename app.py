@@ -17,6 +17,7 @@ ALIASES = {"NVDA": ["nvidia"], "AAPL": ["apple", "iphone"], "AMZN": ["amazon", "
            "AMD": ["advanced micro devices"], "TSLA": ["tesla"]}
 RX = {t: re.compile(r"\b(" + "|".join(map(re.escape, [t.lower()] + a)) + r")\b", re.I) for t, a in ALIASES.items()}
 
+W_TECH, W_NEWS, W_HIST = 0.40, 0.40, 0.20  # weights of chart / news / history in the final probability
 NIT = os.getenv("NITTER_HOST", "https://nitter.net")
 def gn(site):  # Google News RSS scoped to one outlet (those outlets have no open RSS)
     return f"https://news.google.com/rss/search?q=site:{site}+(stocks+OR+earnings+OR+markets)+when:1d&hl=en-US&gl=US&ceid=US:en"
@@ -218,6 +219,18 @@ def signals(df):
     atr = sv(T(ta.atr, h, l, c, length=14)) or float((h - l).tail(14).mean())
     return out, atr, base + NPAT
 
+def news_shock(t):
+    # 3+ strongly worded headlines in 6h from 2+ sources, leaning one way at least 2:1
+    now = time.time()
+    its = [i for i in NEWS.values() if t in i["tickers"] and now - i["ts"] < 21600 and abs(i["score"]) >= 0.5]
+    neg = [i for i in its if i["score"] < 0]; pos = [i for i in its if i["score"] > 0]
+    if len(neg) >= 3 and len(neg) >= 2 * len(pos): d, L = -1, neg
+    elif len(pos) >= 3 and len(pos) >= 2 * len(neg): d, L = 1, pos
+    else: return {"dir": 0}
+    if len({i["source"] for i in L}) < 2: return {"dir": 0}
+    L = sorted(L, key=lambda i: -i["ts"])
+    return {"dir": d, "count": len(L), "sources": len({i["source"] for i in L}), "titles": [i["title"][:110] for i in L[:3]]}
+
 def news_score(t):
     now = time.time()
     own = [i for i in NEWS.values() if t in i["tickers"] and now - i["ts"] < 86400]
@@ -327,7 +340,10 @@ async def _analysis(ticker: str, tf: str = "1D"):
     ns, nn = news_score(ticker)
     hp = hist.get("p_up")
     nb = 50 + 50 * ns
-    up = max(3.0, min(97.0, (0.55 * tech + 0.25 * nb + 0.20 * hp) if hp is not None else (0.7 * tech + 0.3 * nb)))
+    up = max(3.0, min(97.0, (W_TECH * tech + W_NEWS * nb + W_HIST * hp) if hp is not None else (0.55 * tech + 0.45 * nb)))
+    shock = news_shock(ticker)
+    if shock["dir"] < 0: up = min(up, 40.0)
+    elif shock["dir"] > 0: up = max(up, 60.0)
     p = float(df["close"].iloc[-1]); sup = float(df["low"].tail(20).min()); res = float(df["high"].tail(20).max())
     lo = max(p - 0.8 * atr, sup - 0.1 * atr); hi = min(lo + 0.6 * atr, p)
     if hi <= lo: lo, hi = p - 0.6 * atr, p - 0.1 * atr
@@ -338,12 +354,18 @@ async def _analysis(ticker: str, tf: str = "1D"):
     usd = lambda x: f"${x:,.2f}"
     nbull = sum(x["signal"] > 0 for x in sigs); nbear = sum(x["signal"] < 0 for x in sigs)
     nl = "positive" if ns > 0.15 else "negative" if ns < -0.15 else "neutral"
-    if up >= 65: ah, ad = "BUY NOW and hold", f"Buy around {usd(lo)} to {usd(hi)} (or at the current {usd(p)}), hold until it reaches {usd(tp_lo)} to {usd(tp_hi)}, then sell. If it falls to {usd(stop)}, exit to limit the loss."
-    elif up >= 55: ah, ad = "Lean BUY - start small", f"Conditions lean positive but not strongly. Consider a small buy near {usd(lo)} to {usd(hi)}, aim to sell at {usd(tp_lo)} to {usd(tp_hi)}, and exit if it drops to {usd(stop)}."
+    if up >= 65: ah, ad = "BUY NOW and hold", f"Buy around {usd(lo)} to {usd(hi)} (or at the current {usd(p)}), hold until it reaches {usd(tp_lo)} to {usd(tp_hi)}, then sell. If it falls to {usd(stop)}, the picture has changed, so reconsider the position."
+    elif up >= 55: ah, ad = "Lean BUY - start small", f"Conditions lean positive but not strongly. Consider a small buy near {usd(lo)} to {usd(hi)}, aim to sell at {usd(tp_lo)} to {usd(tp_hi)}, and reconsider if it drops to {usd(stop)}."
     elif up > 45: ah, ad = "WAIT - no clear edge", f"Signals are mixed. Better to wait for a dip into {usd(lo)} to {usd(hi)} or a clear break above {usd(res)} before buying."
-    elif up > 35: ah, ad = "Not a good time to buy", f"Conditions lean negative. Wait for a pullback toward {usd(sup)}. If you hold it, consider selling into a bounce near {usd(tp_lo)}, and exit below {usd(stop)}."
+    elif up > 35: ah, ad = "Not a good time to buy", f"Conditions lean negative. Wait for a pullback toward {usd(sup)}. If you hold it, consider selling into a bounce near {usd(tp_lo)}, and reconsider below {usd(stop)}."
     else: ah, ad = "AVOID - high risk, wait", f"Conditions are negative. Don't buy now. If you hold it, consider selling on a bounce near {usd(tp_lo)} or if it breaks {usd(stop)}. Wait for it to reach {usd(sup)} and stabilize before reconsidering."
     advice = {"headline": ah, "detail": ad, "why": f"{nbull} bullish vs {nbear} bearish indicators, news {nl}, history {'n/a' if hp is None else str(round(hp)) + '% up over 10 days'}."}
+    if shock["dir"] != 0:
+        ex = " | ".join(shock["titles"][:2]); how = f"{shock['count']} strongly {'negative' if shock['dir'] < 0 else 'positive'} headlines about {ticker} from {shock['sources']} sources in the last 6 hours."
+        if shock["dir"] < 0:
+            advice = {"headline": "BAD NEWS ALERT - don't buy yet", "detail": f"{how} Even if the chart looks fine, wait for the news to settle before buying. If you hold it, reconsider your plan; the price could drift toward {usd(sup)} or lower. Headlines: {ex}", "why": advice["why"], "alert": "bearish"}
+        else:
+            advice = {"headline": "GOOD NEWS SURGE - watch for a buy", "detail": f"{how} Prices often jump before you can react, so avoid chasing a sudden spike. Consider a small buy on a dip near {usd(lo)} to {usd(hi)}, aiming for {usd(tp_lo)} to {usd(tp_hi)}. Headlines: {ex}", "why": advice["why"], "alert": "bullish"}
     r = lambda x: round(float(x), 2)
     return {"ticker": ticker, "tf": tf, "price": r(p), "atr": r(atr), "asof": str(df.index[-1]),
             "tech_score": r(tech), "news_score": r(ns), "news_count": nn,
@@ -351,7 +373,7 @@ async def _analysis(ticker: str, tf: str = "1D"):
             "targets": {"buy": [r(lo), r(hi)], "take_profit": [r(tp_lo), r(tp_hi)], "stop": r(stop), "support": r(sup), "resistance": r(res)},
             "counts": {"bullish": sum(s["signal"] > 0 for s in sigs), "bearish": sum(s["signal"] < 0 for s in sigs),
                        "neutral": sum(s["signal"] == 0 for s in sigs), "scanned": scanned},
-            "history": hist, "hist_prob": hp, "advice": advice, "signals": [{"n": x["name"], "g": x["group"], "s": x["signal"]} for x in sigs]}
+            "history": hist, "hist_prob": hp, "advice": advice, "shock": shock, "signals": [{"n": x["name"], "g": x["group"], "s": x["signal"]} for x in sigs]}
 
 @app.get("/api/analysis/{ticker}")
 async def analysis(ticker: str, tf: str = "1D"):
