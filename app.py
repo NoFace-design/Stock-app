@@ -397,7 +397,7 @@ async def analysis(ticker: str, tf: str = "1D"):
         import traceback
         raise HTTPException(500, f"{type(e).__name__}: {e} | " + " / ".join(traceback.format_exc().strip().splitlines()[-4:]))
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")  # change on Render without editing code
 REFUSAL = "I can only help with stock, market and trading questions."
 SYSTEM = (
     "You are the market-analysis assistant inside a personal stock dashboard. "
@@ -417,14 +417,14 @@ def rate_ok(ip):
     if len(L) >= 20: RATE[ip] = L; return False
     L.append(now); RATE[ip] = L; return True
 
-async def groq(messages, max_tokens=700, temperature=0.3):
+async def groq(messages, max_tokens=1500, temperature=0.3):
     key = os.getenv("GROQ_API_KEY")
     if not key: raise HTTPException(503, "AI is not set up yet: add GROQ_API_KEY in Render's Environment settings.")
     async with httpx.AsyncClient(timeout=40) as c:
         r = await c.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
-                         json={"model": GROQ_MODEL, "messages": messages, "max_tokens": max_tokens, "temperature": temperature})
+                         json={"model": GROQ_MODEL, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, **({"reasoning_effort": "low"} if "gpt-oss" in GROQ_MODEL else {})})
     if r.status_code == 429: raise HTTPException(429, "Groq's free limit was reached. Try again in a minute.")
-    if r.status_code != 200: raise HTTPException(502, f"Groq error {r.status_code}")
+    if r.status_code != 200: raise HTTPException(502, f"Groq error {r.status_code}: {r.text[:200]}")
     return r.json()["choices"][0]["message"]["content"].strip()
 
 def ai_context(t, d):
@@ -455,7 +455,7 @@ async def ai(body: AIIn, request: Request):
     if msg:  # guardrail 1: a separate yes/no check before the real answer
         prev = next((str(m.get("content", ""))[:300] for m in reversed(body.history) if isinstance(m, dict) and m.get("role") == "user"), "")
         gate = await groq([{"role": "system", "content": "Decide if the latest user message is about stocks, markets, trading, investing, a company's financial prospects, or is a short follow-up (like 'why?') to such a discussion. Answer with exactly one word: YES or NO."},
-                           {"role": "user", "content": f"Previous message: {prev}\nLatest message: {msg}"}], max_tokens=3, temperature=0)
+                           {"role": "user", "content": f"Previous message: {prev}\nLatest message: {msg}"}], max_tokens=300, temperature=0)
         if not gate.upper().startswith("YES"): return {"reply": REFUSAL}
     else:
         msg = "Give your second-opinion trade synthesis for this stock from the DATA: overall stance, bull case, bear case, how chart vs news vs history agree or conflict, key price levels, and what would change your view."
