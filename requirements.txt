@@ -3,6 +3,6 @@ uvicorn
 httpx
 feedparser
 yfinance
-numpy>=1.26.0
-pandas>=2.2.0
+numpy
+pandas
 pandas-ta-classic
