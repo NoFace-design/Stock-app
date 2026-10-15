@@ -348,6 +348,9 @@ async def sources(): return list(STATUS.values())
 async def tickers(): return TICKERS
 
 @app.get("/", response_class=HTMLResponse)
-async def index(): return (Path(__file__).parent / "public" / "index.html").read_text(encoding="utf-8")
+async def index():
+    for p in (Path(__file__).parent / "public" / "index.html", Path(__file__).parent / "index.html"):
+        if p.exists(): return p.read_text(encoding="utf-8")
+    return HTMLResponse("index.html not found. Put it inside a folder named public.", status_code=404)
 
 # run: uvicorn app:app --host 0.0.0.0 --port 8000
