@@ -50,8 +50,6 @@ FEEDS = {
     "Mint": ("Asia", gn("livemint.com")), "Japan Times": ("Asia", gn("japantimes.co.jp")),
     # China (English editions; privately run commercial outlets only, state-run media excluded on purpose)
     "TechNode": ("China", gn("technode.com")),
-    "Pandaily": ("China", gn("pandaily.com")), "36Kr English": ("China", gn("eu.36kr.com")),
-    "CnEVPost": ("China", gn("cnevpost.com")), "EqualOcean": ("China", gn("equalocean.com")),
     # Middle East
     "Arab News": ("Middle East", gn("arabnews.com")), "Gulf News": ("Middle East", gn("gulfnews.com")),
     "The National (UAE)": ("Middle East", gn("thenationalnews.com")), "Al Arabiya": ("Middle East", gn("english.alarabiya.net")),
