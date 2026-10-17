@@ -12,14 +12,17 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
 
-TICKERS = ["NVDA", "AAPL", "AMZN", "MU", "AVGO", "TSM", "INTC", "META", "MSFT", "AMD", "TSLA", "GOOG"]
+TICKERS = ["NVDA", "AAPL", "AMZN", "MU", "AVGO", "TSM", "INTC", "META", "MSFT", "AMD", "TSLA", "GOOG", "SNDK", "SPCX", "GOLD", "SILVER", "BRENT"]
 ALIASES = {"NVDA": ["nvidia"], "AAPL": ["apple", "iphone"], "AMZN": ["amazon", "aws"], "MU": ["micron"],
            "AVGO": ["broadcom"], "TSM": ["tsmc", "taiwan semiconductor"], "INTC": ["intel"],
            "META": ["meta platforms", "facebook", "instagram"], "MSFT": ["microsoft", "azure"],
-           "AMD": ["advanced micro devices"], "TSLA": ["tesla"], "GOOG": ["google", "alphabet"]}
+           "AMD": ["advanced micro devices"], "TSLA": ["tesla"], "GOOG": ["google", "alphabet"],
+           "SNDK": ["sandisk"], "SPCX": ["spacex", "starlink"], "GOLD": ["gold price", "gold prices", "bullion"],
+           "SILVER": ["silver price", "silver prices"], "BRENT": ["brent", "crude oil", "oil prices"]}
+YF = {"GOLD": "GC=F", "SILVER": "SI=F", "BRENT": "BZ=F"}  # futures symbols on Yahoo
 RX = {t: re.compile(r"\b(" + "|".join(map(re.escape, [t.lower()] + a)) + r")\b", re.I) for t, a in ALIASES.items()}
 
-W_TECH, W_NEWS, W_HIST = 0.55, 0.25, 0.20  # weights of chart / news / history in the final probability
+W_TECH, W_NEWS, W_HIST = 0.50, 0.30, 0.20  # weights of chart / news / history in the final probability
 NIT = os.getenv("NITTER_HOST", "https://nitter.net")
 def gn(site):  # Google News RSS scoped to one outlet (those outlets have no open RSS)
     return f"https://news.google.com/rss/search?q=site:{site}+(stocks+OR+earnings+OR+markets)+when:1d&hl=en-US&gl=US&ceid=US:en"
@@ -134,7 +137,7 @@ def load(t, tf):
     k = (t, tf)
     if k in CACHE and time.time() - CACHE[k][0] < 10: return CACHE[k][1]
     iv, per, rs = TF[tf]
-    with YF_LOCK: df = yf.Ticker(t).history(period=per, interval=iv, auto_adjust=False)
+    with YF_LOCK: df = yf.Ticker(YF.get(t, t)).history(period=per, interval=iv, auto_adjust=False)
     if df is None or df.empty: raise ValueError("no market data returned")
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     df.columns = [str(c).lower() for c in df.columns]
@@ -313,7 +316,7 @@ def tone_study(t, c):
     return {"days": int(len(x)), "corr": f2(x.dev.corr(x.f5)), "up_pos": f2((pos.f5 > 0).mean() * 100), "up_neg": f2((neg.f5 > 0).mean() * 100), "tone_now": f2(dev.dropna().iloc[-1])}
 
 def _history(t):
-    with YF_LOCK: df = yf.Ticker(t).history(period="max", interval="1d", auto_adjust=True)
+    with YF_LOCK: df = yf.Ticker(YF.get(t, t)).history(period="max", interval="1d", auto_adjust=True)
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     df.columns = [str(x).lower() for x in df.columns]
     df = df[["open", "high", "low", "close", "volume"]].astype(float).dropna().tail(3800)
@@ -366,7 +369,7 @@ async def _analysis(ticker: str, tf: str = "1D"):
     ns, nn = news_score(ticker)
     hp = hist.get("p_up")
     nb = 50 + 50 * ns
-    up = max(3.0, min(97.0, (W_TECH * tech + W_NEWS * nb + W_HIST * hp) if hp is not None else (0.7 * tech + 0.3 * nb)))
+    up = max(3.0, min(97.0, (W_TECH * tech + W_NEWS * nb + W_HIST * hp) if hp is not None else (0.625 * tech + 0.375 * nb)))
     shock = news_shock(ticker)
     if shock["dir"] < 0: up = min(up, 40.0)
     elif shock["dir"] > 0: up = max(up, 60.0)

@@ -76,8 +76,8 @@ body{background:radial-gradient(circle at 20% 10%,#1e1b4b,#0b1020 50%,#020617);m
 </div>
 <nav id="tabs" class="lg:hidden fixed bottom-0 inset-x-0 z-30 glass rounded-none grid grid-cols-3 text-sm" style="padding-bottom:env(safe-area-inset-bottom)"></nav>
 <script>
-const TK=["NVDA","AAPL","AMZN","MU","AVGO","TSM","INTC","META","MSFT","AMD","TSLA","GOOG"],TFS=["15M","1H","4H","1D"];
-const TVI={"15M":"15","1H":"60","4H":"240","1D":"D"},sym=t=>(t==="TSM"?"NYSE:":"NASDAQ:")+t;
+const TK=["NVDA","AAPL","AMZN","MU","AVGO","TSM","INTC","META","MSFT","AMD","TSLA","GOOG","SNDK","SPCX","GOLD","SILVER","BRENT"],TFS=["15M","1H","4H","1D"];
+const TVI={"15M":"15","1H":"60","4H":"240","1D":"D"},sym=t=>({TSM:"NYSE:TSM",GOLD:"TVC:GOLD",SILVER:"TVC:SILVER",BRENT:"TVC:UKOIL"})[t]||"NASDAQ:"+t;
 const COL={green:["bg-green-600/70","border-green-400"],red:["bg-red-600/70","border-red-400"],yellow:["bg-yellow-500/70","border-yellow-300"]};
 let cur="NVDA",tf="1D",all=false,reqId=0;
 const $=id=>document.getElementById(id),f=a=>"$"+a.toFixed(2);
