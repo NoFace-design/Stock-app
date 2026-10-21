@@ -532,6 +532,10 @@ KIND = {
                "pos": "A concrete agreement (trade, tariffs, ceasefire, sanctions relief): usually positive.",
                "neg": "Talks collapse, or new tariffs, sanctions or escalation: usually negative.",
                "flat": "Vague statements and photo-ops: little change, which is common."}}
+KIND["earn"] = {"c": "yellow", "sum": "A very large company reports its quarterly results. The price often jumps or drops within seconds, depending on whether results and the outlook beat or miss what analysts expected.",
+                "pos": "Beats expectations on profit and revenue and gives a strong outlook: often a jump.",
+                "neg": "Misses, or warns about the next quarter: often a sharp drop, even after a small miss.",
+                "flat": "Roughly in line: usually a small move, though the outlook can still swing the price."}
 _M = "jan feb mar apr may jun jul aug sep oct nov dec".split()
 DATE_RX = re.compile(r"\b(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b|(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b)", re.I)
 EVT_RX = re.compile(r"summit|talks\b|\bmeets?\b|\bmeeting\b|G20|G7|OPEC|General Assembly|UNGA|Security Council|NATO|BRICS|referendum|election|rate decision|trade deal|deadline", re.I)
@@ -556,10 +560,75 @@ def update_dyn():
     old = (today - dt.timedelta(days=1)).isoformat()
     for k in [k for k, e in DYN.items() if e["date"] < old]: DYN.pop(k, None)
 
+EARN_TICKERS = ["NVDA", "AAPL", "MSFT", "AMZN", "GOOG", "META", "TSLA", "AVGO", "TSM"]  # the giant companies; add more here
+EARN = {}; EARN_AT = 0.0; EARN_BUSY = False
+
+def earn_one(t):
+    today = dt.date.today()
+    with YF_LOCK: tk = yf.Ticker(YF.get(t, t)); cal = tk.calendar
+    dates = sorted(x for x in (pd.Timestamp(d).date() for d in (cal.get("Earnings Date") or [])) if x >= today) if isinstance(cal, dict) else []
+    if not dates: return None
+    eps, rev = cal.get("Earnings Average"), cal.get("Revenue Average")
+    notes = ["Date comes from Yahoo Finance; companies sometimes confirm or move it."]
+    if eps is not None and pd.notna(eps):
+        notes.append(f"Analysts expect earnings per share of about ${float(eps):.2f}" + (f" and revenue of about ${float(rev) / 1e9:.1f}B" if rev is not None and pd.notna(rev) else "") + ". Results above these usually please investors; results below usually hurt.")
+    try:
+        with YF_LOCK: ed = tk.get_earnings_dates(limit=12); px = tk.history(period="3y", auto_adjust=True)["Close"]
+        px.index = pd.to_datetime(px.index).tz_localize(None).normalize(); rows = []
+        for ts, r in ed.iterrows():
+            if pd.isna(r.get("Surprise(%)")): continue
+            loc = pd.Timestamp(ts); loc = loc.tz_convert("America/New_York") if loc.tzinfo else loc
+            day = (loc.tz_localize(None) if loc.tzinfo else loc).normalize()
+            pos = px.index.searchsorted(day + pd.Timedelta(days=1) if loc.hour >= 12 else day)
+            if 0 < pos < len(px): rows.append((float(px.iloc[pos] / px.iloc[pos - 1] - 1) * 100, float(r["Surprise(%)"])))
+        if len(rows) >= 4:
+            beats = [(m, x) for m, x in rows if x > 0]; miss = [m for m, x in rows if x < 0]
+            notes.append(f"Typical move the day after results: about {sum(abs(m) for m, _ in rows) / len(rows):.1f}% either way (last {len(rows)} reports).")
+            if beats: notes.append(f"It beat expectations {len(beats)} times (by about {sum(x for _, x in beats) / len(beats):.0f}% on average); the average move after a beat was {sum(m for m, _ in beats) / len(beats):+.1f}%.")
+            if miss: notes.append(f"It missed {len(miss)} times; the average move after a miss was {sum(miss) / len(miss):+.1f}%.")
+    except Exception: pass
+    return {"date": dates[0].isoformat(), "title": f"{t} earnings report", "kind": "earn", "color": "yellow", "dyn": False, "note": notes}
+
+async def fill_earn():
+    global EARN_AT, EARN_BUSY
+    if EARN_BUSY or time.time() - EARN_AT < 21600: return
+    EARN_BUSY = True
+    try:
+        for t in EARN_TICKERS:
+            try: EARN[t] = await asyncio.to_thread(earn_one, t)
+            except Exception: pass
+        EARN_AT = time.time()
+    finally: EARN_BUSY = False
+
+BLS_EV = []; BLS_AT = 0.0; BLS_BUSY = False
+async def bls_refresh():
+    # official BLS release calendar: if a CPI or jobs report is postponed, the new date shows up here
+    global BLS_EV, BLS_AT, BLS_BUSY
+    if BLS_BUSY or time.time() - BLS_AT < 21600: return
+    BLS_BUSY = True
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=SEC_UA) as c:
+            r = await c.get("https://www.bls.gov/schedule/news_release/bls.ics")
+        r.raise_for_status(); out = []
+        for blk in r.text.split("BEGIN:VEVENT")[1:]:
+            sm = re.search(r"SUMMARY:(.*)", blk); ds = re.search(r"DTSTART[^:\n]*:(\d{8})", blk)
+            if not (sm and ds): continue
+            name = sm.group(1).strip(); d = ds.group(1); iso = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+            if name.startswith("Consumer Price Index for"): out.append((iso, "US inflation report (CPI)", "cpi"))
+            elif name.startswith("Employment Situation for"): out.append((iso, "US jobs report", "jobs"))
+        if out: BLS_EV = sorted(set(out)); BLS_AT = time.time()
+        else: BLS_AT = time.time() - 20000
+    except Exception: BLS_AT = time.time() - 20000
+    finally: BLS_BUSY = False
+
 @app.get("/api/calendar")
 async def calendar_api():
     await capped_refresh(); update_dyn()
-    ev = [{"date": d, "title": t, "kind": k, "color": KIND[k]["c"], "dyn": False} for d, t, k in CAL_FIXED] + list(DYN.values())
+    asyncio.create_task(fill_earn()); asyncio.create_task(bls_refresh())
+    fixed = list(CAL_FIXED)
+    if BLS_EV:
+        lo = min(e[0] for e in BLS_EV); fixed = [x for x in fixed if x[2] not in ("cpi", "jobs") or x[0] < lo] + BLS_EV
+    ev = [{"date": d, "title": t, "kind": k, "color": KIND[k]["c"], "dyn": False} for d, t, k in fixed] + list(DYN.values()) + [e for e in EARN.values() if e]
     ev.sort(key=lambda e: (e["date"], e["title"]))
     return {"today": dt.date.today().isoformat(), "events": ev, "kinds": KIND}
 

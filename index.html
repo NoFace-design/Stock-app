@@ -213,7 +213,7 @@ function showDay(iso){const box=$("caldet");box.innerHTML="";const evs=CAL.event
   evs.forEach(e=>{const k=CAL.kinds[e.kind]||{},c=el("div","rounded-lg bg-white/5 p-3 mb-2");
     const h=el("div","flex items-center gap-2");h.appendChild(el("span","w-3 h-3 rounded-full shrink-0 "+CC[e.color][0]));h.appendChild(el("span","font-semibold",e.title));c.appendChild(h);
     c.appendChild(el("div","text-xs text-slate-400 mt-1",fd(e.date,{weekday:"long",month:"long",day:"numeric",year:"numeric"})+" · "+CC[e.color][1]+(e.dyn?" · auto-detected from "+e.source:"")));
-    c.appendChild(el("div","mt-2",k.sum||""));
+    c.appendChild(el("div","mt-2",k.sum||""));(e.note||[]).forEach(n=>c.appendChild(el("div","mt-1 text-slate-300",n)));
     [["If it goes well","text-green-300",k.pos],["If it goes badly","text-red-300",k.neg],["If nothing surprising","text-slate-300",k.flat]].forEach(x=>c.appendChild(el("div","mt-1 "+x[1],x[0]+": "+(x[2]||""))));
     if(e.dyn&&/^https?:/.test(e.link)){const a=el("a","text-xs text-indigo-300 underline mt-2 inline-block","Open headline");a.href=e.link;a.target="_blank";a.rel="noopener";c.appendChild(a)}
     box.appendChild(c)})}
