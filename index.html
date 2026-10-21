@@ -9,6 +9,7 @@ body{background:radial-gradient(circle at 20% 10%,#1e1b4b,#0b1020 50%,#020617);m
 @media(max-width:1023px){[data-tab]{display:none!important}[data-tab=signal].on{display:grid!important}[data-tab=signalb].on{display:block!important}[data-tab=chart].on{display:block!important}[data-tab=news].on{display:flex!important}}
 #ai:not(.hidden){display:flex!important;flex-direction:column;max-height:calc(100vh - 1rem)}
 #ai-msgs{min-height:0;overflow-y:auto;overscroll-behavior:contain}
+#calmodal:not(.hidden){display:flex}
 </style></head>
 <body class="flex flex-col lg:flex-row gap-4 p-3 pb-24 lg:p-4">
 <aside class="glass p-2 lg:p-3 lg:w-48 shrink-0 sticky top-0 z-20 lg:static lg:self-start">
@@ -52,6 +53,10 @@ body{background:radial-gradient(circle at 20% 10%,#1e1b4b,#0b1020 50%,#020617);m
       <div class="text-xs text-purple-300/80 mt-2">This is only my calculation and I cannot guarantee anything. Not financial advice.</div>
     </div>
     <div id="key" class="glass p-3 flex flex-wrap items-center gap-2 text-sm"></div>
+    <div id="cal" class="glass p-3 cursor-pointer">
+      <div class="flex items-center justify-between"><div class="font-semibold text-sm">Upcoming market events</div><div class="text-xs text-slate-400">Tap for the full-year calendar ▸</div></div>
+      <div id="cal-top" class="mt-2 space-y-1 text-sm">Loading…</div>
+    </div>
   </div>
   <div class="grid lg:grid-cols-3 gap-4">
     <div data-tab="chart" class="glass p-2 lg:col-span-2 h-[65vh] lg:h-[480px]" id="chart"></div>
@@ -75,6 +80,16 @@ body{background:radial-gradient(circle at 20% 10%,#1e1b4b,#0b1020 50%,#020617);m
   <button id="ai-op" class="mb-2 py-2 rounded-lg bg-purple-600/70 hover:bg-purple-600 text-sm font-semibold">Second opinion on this stock</button>
   <div class="flex gap-2"><input id="ai-in" maxlength="500" placeholder="Ask a follow-up about this stock…" class="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm outline-none"><button id="ai-send" class="px-4 rounded-lg bg-indigo-500 text-sm font-semibold">Send</button></div>
   <div class="text-[10px] text-slate-500 mt-1">AI can be wrong. Not financial advice. Answers only stock, market and trading questions.</div>
+</div>
+<div id="calmodal" class="hidden fixed inset-0 z-[60] items-center justify-center p-3 bg-black/60">
+  <div class="glass flex flex-col w-full max-w-5xl" style="max-height:calc(100vh - 1.5rem);background:rgba(15,23,42,.97)">
+    <div class="flex items-center justify-between p-3 shrink-0"><div><div class="font-bold">Market calendar</div>
+      <div class="text-xs text-slate-400 flex gap-3 flex-wrap"><span>🟢 likely positive</span><span>🟡 uncertain</span><span>🔴 likely negative</span></div></div>
+      <button id="calx" class="px-2 text-lg">✕</button></div>
+    <div id="caldet" class="px-3 pb-2 shrink-0 overflow-y-auto text-sm" style="max-height:32vh;overscroll-behavior:contain"></div>
+    <div id="calyear" class="relative flex-1 min-h-0 overflow-y-auto grid sm:grid-cols-2 lg:grid-cols-3 gap-2 p-3 content-start" style="overscroll-behavior:contain"></div>
+    <div class="p-3 text-[11px] text-slate-500 shrink-0">Central bank and US data dates come from official schedules and can shift. Other events are detected automatically from news headlines that mention a date, so the list may be incomplete or wrong. Colors are rule-based guesses, not predictions.</div>
+  </div>
 </div>
 <nav id="tabs" class="lg:hidden fixed bottom-0 inset-x-0 z-30 glass rounded-none grid grid-cols-3 text-sm" style="padding-bottom:env(safe-area-inset-bottom)"></nav>
 <script>
@@ -184,4 +199,39 @@ function cycle(){nextAt=Date.now()+30000;loadNews();loadAnalysis(true)}
 setInterval(()=>{if(document.hidden)return;const s=Math.max(0,Math.round((nextAt-Date.now())/1000));$("tick").textContent=`● Live · next refresh in ${s}s`;if(s<=0)cycle()},1000);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)cycle()});
 refresh();
+
+const CC={green:["bg-green-500","Likely positive"],yellow:["bg-yellow-400","Uncertain (coin flip)"],red:["bg-red-500","Likely negative"]};
+let CAL={events:[],kinds:{},today:""};
+const fd=(iso,o)=>new Date(iso+"T00:00:00").toLocaleDateString([],o||{weekday:"short",month:"short",day:"numeric"});
+function renderCalTop(){const b=$("cal-top");b.innerHTML="";const up=CAL.events.filter(e=>e.date>=CAL.today).slice(0,3);
+  if(!up.length){b.textContent="No upcoming events found.";return}
+  up.forEach(e=>{const r=el("div","flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-white/10");
+    r.appendChild(el("span","w-3 h-3 rounded-full shrink-0 "+CC[e.color][0]));r.appendChild(el("span","text-slate-400 shrink-0 w-24",fd(e.date)));r.appendChild(el("span","truncate",e.title));
+    r.onclick=ev=>{ev.stopPropagation();openCal(e.date)};b.appendChild(r)})}
+function showDay(iso){const box=$("caldet");box.innerHTML="";const evs=CAL.events.filter(e=>e.date===iso);
+  if(!evs.length){box.appendChild(el("div","text-slate-400","Tap a colored day to see what happens and what it could mean."));return}
+  evs.forEach(e=>{const k=CAL.kinds[e.kind]||{},c=el("div","rounded-lg bg-white/5 p-3 mb-2");
+    const h=el("div","flex items-center gap-2");h.appendChild(el("span","w-3 h-3 rounded-full shrink-0 "+CC[e.color][0]));h.appendChild(el("span","font-semibold",e.title));c.appendChild(h);
+    c.appendChild(el("div","text-xs text-slate-400 mt-1",fd(e.date,{weekday:"long",month:"long",day:"numeric",year:"numeric"})+" · "+CC[e.color][1]+(e.dyn?" · auto-detected from "+e.source:"")));
+    c.appendChild(el("div","mt-2",k.sum||""));
+    [["If it goes well","text-green-300",k.pos],["If it goes badly","text-red-300",k.neg],["If nothing surprising","text-slate-300",k.flat]].forEach(x=>c.appendChild(el("div","mt-1 "+x[1],x[0]+": "+(x[2]||""))));
+    if(e.dyn&&/^https?:/.test(e.link)){const a=el("a","text-xs text-indigo-300 underline mt-2 inline-block","Open headline");a.href=e.link;a.target="_blank";a.rel="noopener";c.appendChild(a)}
+    box.appendChild(c)})}
+function renderYear(){const A=$("calyear");A.innerHTML="";const y=+CAL.today.slice(0,4);
+  for(let m=0;m<12;m++){const card=el("div","rounded-xl bg-white/5 p-2");card.id="calm"+m;
+    card.appendChild(el("div","font-semibold text-sm mb-1",new Date(y,m,1).toLocaleDateString([],{month:"long"})+" "+y));
+    const g=el("div","grid grid-cols-7 gap-1 text-center text-xs");"SMTWTFS".split("").forEach(d=>g.appendChild(el("div","text-slate-500",d)));
+    const first=new Date(y,m,1).getDay(),n=new Date(y,m+1,0).getDate();for(let i=0;i<first;i++)g.appendChild(el("div"));
+    for(let d=1;d<=n;d++){const iso=y+"-"+String(m+1).padStart(2,"0")+"-"+String(d).padStart(2,"0"),evs=CAL.events.filter(e=>e.date===iso);
+      const c=evs.length?(evs.some(e=>e.color==="red")?"red":evs.some(e=>e.color==="green")?"green":"yellow"):null;
+      const b=el("button","rounded py-1 "+(c?CC[c][0]+" text-black font-semibold":"text-slate-300")+(iso===CAL.today?" ring-2 ring-white":""),d);
+      if(evs.length)b.onclick=()=>showDay(iso);g.appendChild(b)}
+    card.appendChild(g);A.appendChild(card)}}
+function openCal(iso){$("calmodal").classList.remove("hidden");renderYear();showDay(iso);
+  const t=$("calm"+(+iso.slice(5,7)-1));if(t)$("calyear").scrollTop=t.offsetTop-8}
+function closeCal(){$("calmodal").classList.add("hidden")}
+async function loadCal(){try{CAL=await(await fetch("/api/calendar")).json();renderCalTop();if(!$("calmodal").classList.contains("hidden"))renderYear()}catch(e){}}
+$("cal").onclick=()=>openCal(CAL.today||new Date().toISOString().slice(0,10));$("calx").onclick=closeCal;
+$("calmodal").onclick=e=>{if(e.target.id==="calmodal")closeCal()};document.addEventListener("keydown",e=>{if(e.key==="Escape")closeCal()});
+loadCal();setInterval(()=>{if(!document.hidden)loadCal()},60000);
 </script></body></html>

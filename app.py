@@ -503,4 +503,64 @@ async def index():
         if p.exists(): return p.read_text(encoding="utf-8")
     return HTMLResponse("index.html not found. Put it inside a folder named public.", status_code=404)
 
+
+# ---------------- Market events calendar ----------------
+import datetime as dt
+
+def _mk(kind, title, dates): return [(d, title, kind) for d in dates.split()]
+CAL_FIXED = (  # central-bank and US data dates checked against official schedules in Oct 2026; they can shift
+    _mk("cb", "Fed (FOMC) rate decision", "2026-01-28 2026-03-18 2026-04-29 2026-06-17 2026-07-29 2026-09-16 2026-10-28 2026-12-09")
+    + _mk("cb", "Bank of England rate decision", "2026-02-05 2026-03-19 2026-04-30 2026-06-18 2026-07-30 2026-09-17 2026-11-05 2026-12-17")
+    + _mk("cb", "ECB rate decision", "2026-09-10 2026-10-29 2026-12-17")
+    + _mk("cpi", "US inflation report (CPI)", "2026-01-13 2026-02-13 2026-03-11 2026-04-10 2026-05-12 2026-06-10 2026-07-14 2026-08-12 2026-09-11 2026-10-14 2026-11-10 2026-12-10")
+    + _mk("jobs", "US jobs report", "2026-01-09 2026-02-11 2026-03-06 2026-04-03 2026-05-08 2026-06-05 2026-09-04 2026-10-02 2026-11-06 2026-12-04"))
+KIND = {
+    "cb": {"c": "yellow", "sum": "A central bank announces whether it raises, holds or cuts interest rates and hints at what comes next.",
+           "pos": "Cuts, or hints at cuts: usually good for stocks (especially tech), gold and silver.",
+           "neg": "Hikes, or a warning that rates stay high: usually bad for stocks and gold.",
+           "flat": "Does what markets already expect: often little change beyond a short burst of volatility."},
+    "cpi": {"c": "yellow", "sum": "The US inflation report. It shapes expectations for Fed rate decisions.",
+            "pos": "Cooler than expected: rate-cut hopes rise, usually good for stocks.",
+            "neg": "Hotter than expected: rate-cut hopes fade, usually bad for stocks.", "flat": "In line with forecasts: little change."},
+    "jobs": {"c": "yellow", "sum": "The US jobs report: jobs added and the unemployment rate.",
+             "pos": "Solid but not overheated: supports growth without alarming the Fed.",
+             "neg": "Very hot (rates stay high) or very weak (recession fears): both can hurt stocks.", "flat": "Close to forecasts: little change."},
+    "opec": {"c": "yellow", "sum": "Oil producers decide how much crude to supply.",
+             "pos": "Supply cuts: Brent and energy stocks rise, though inflation worries can weigh on other stocks.",
+             "neg": "Output increases: oil falls, which hurts energy stocks but can help airlines and consumers.", "flat": "Keeps the current plan: little change."},
+    "summit": {"c": "yellow", "sum": "Leaders or officials meet. Markets often hope for a deal, but many meetings end with little to show.",
+               "pos": "A concrete agreement (trade, tariffs, ceasefire, sanctions relief): usually positive.",
+               "neg": "Talks collapse, or new tariffs, sanctions or escalation: usually negative.",
+               "flat": "Vague statements and photo-ops: little change, which is common."}}
+_M = "jan feb mar apr may jun jul aug sep oct nov dec".split()
+DATE_RX = re.compile(r"\b(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b|(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b)", re.I)
+EVT_RX = re.compile(r"summit|talks\b|\bmeets?\b|\bmeeting\b|G20|G7|OPEC|General Assembly|UNGA|Security Council|NATO|BRICS|referendum|election|rate decision|trade deal|deadline", re.I)
+DYN = {}  # auto-detected events; kept in memory only (cleared when the server restarts)
+
+def update_dyn():
+    today = dt.date.today()
+    for k, i in list(NEWS.items()):
+        if k in DYN or not EVT_RX.search(i["title"]): continue
+        m = DATE_RX.search(i["title"])
+        if not m: continue
+        try:
+            d = dt.date(today.year, _M.index((m.group(1) or m.group(4)).lower()[:3]) + 1, int(m.group(2) or m.group(3)))
+            if d < today:
+                if (today - d).days < 180: continue
+                d = d.replace(year=today.year + 1)
+        except ValueError: continue
+        if (d - today).days > 400: continue
+        t = i["title"]; kind = "opec" if re.search("opec", t, re.I) else "cb" if re.search("rate decision|central bank", t, re.I) else "summit"
+        col = "red" if i["score"] <= -0.5 else "green" if i["score"] >= 0.5 and kind != "summit" else "yellow"
+        DYN[k] = {"date": d.isoformat(), "title": t[:140], "kind": kind, "color": col, "dyn": True, "source": i["source"], "link": i["link"]}
+    old = (today - dt.timedelta(days=1)).isoformat()
+    for k in [k for k, e in DYN.items() if e["date"] < old]: DYN.pop(k, None)
+
+@app.get("/api/calendar")
+async def calendar_api():
+    await capped_refresh(); update_dyn()
+    ev = [{"date": d, "title": t, "kind": k, "color": KIND[k]["c"], "dyn": False} for d, t, k in CAL_FIXED] + list(DYN.values())
+    ev.sort(key=lambda e: (e["date"], e["title"]))
+    return {"today": dt.date.today().isoformat(), "events": ev, "kinds": KIND}
+
 # run: uvicorn app:app --host 0.0.0.0 --port 8000
