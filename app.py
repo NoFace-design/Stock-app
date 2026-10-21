@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Soran G. Kamal. All rights reserved.
+# Proprietary software. No copying, distribution, modification, hosting or commercial use without the owner's prior written permission.
 import asyncio, re, time, os, math, calendar, hashlib, threading, types
 import html as _html, json
 from contextlib import asynccontextmanager
